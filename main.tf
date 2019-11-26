@@ -14,7 +14,7 @@ tags            =  {
 resource "aws_instance" "web-server" {
   ami		= "ami-40d28157"
   instance_type = "t2.micro"
-  vps_security_group_ids = ["${aws_security_group.instance.id}"]
+  vpc_security_group_ids = ["${aws_security_group.instance.id}"]
 
 user_data	= <<-EOF
 		  #!/bin/bash
