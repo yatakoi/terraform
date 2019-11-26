@@ -36,8 +36,8 @@ resource "aws_security_group" "instance" {
   name		= "terraform-instance"
 
   ingress {
-    from_port	= "${var.server_port}"
-    to_port	= "${var.server_port}"
+    from_port	= var.server_port
+    to_port	= var.server_port
     protocol	= "tcp"
     cidr_blocks	= ["0.0.0.0/0"]
   }
