@@ -1,3 +1,8 @@
+variable "server_port" {
+  description = "Этот порт используется для запросов по HTTP"
+  default = "8080"
+}
+
 provider "aws" {
   region = "us-east-1"
 }
@@ -31,8 +36,8 @@ resource "aws_security_group" "instance" {
   name		= "terraform-instance"
 
   ingress {
-    from_port	= 8080
-    to_port	= 8080
+    from_port	= "${var.server_port}"
+    to_port	= "${var.server_port}"
     protocol	= "tcp"
     cidr_blocks	= ["0.0.0.0/0"]
   }
