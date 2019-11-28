@@ -3,83 +3,75 @@
 #############################################################################
 
 variable "server_port" {
-  description = "Этот порт используется для запросов по HTTP"
-  default = "8080"
+  description = "Этот порт используется для HTTP запросов"
+  default     = "8080"
 }
-
-#############################################################################
-# ВЫХОДНЫЕ ПЕРЕМЕННЫЕ
-#############################################################################
-
-# Показать белый IP инстанса 'web-server'
-output "public_ip" {
-  value = "${aws_instance.web-server.public_ip}"
-}
-
 
 #############################################################################
 # КАКОЙ ИСПОЛЬЗУЕТСЯ ПРОВАЙДЕР И РЕГИОН
 #############################################################################
 
 provider "aws" {
-  region = "us-east-1"
+  region = "us-east-2"
 }
-
-
 
 #############################################################################
 # ИНСТАНСЫ
 #############################################################################
 
-# Отказоустойчивый кластер веб-сервера
-resource "aws_launch_configuration" "first-server" {
-  ami           = "ami-40d28157"
-  instance_type = "t2.micro"
-  security_groups = ["${aws_security_group.instance.id}"]
-
-user_data = <<-EOF
-            #!/bin/bash
-            echo "Hello, World" > index.html
-            nohup busybox httpd -f -p "${var.server_port}" &
-            EOF
-            
-lifecycle {
-  create_before_destroy = true
+# FILEOVER ВЕБ-СЕРВЕР НА UBUNTU 
+resource "aws_autoscaling_group" "example" {
+    launch_configuration = aws_launch_configuration.example.name
+    vpc_zone_identifier = data.aws_subnet_ids.default.ids
+    
+    min_size = 2
+    max_size = 10
+    
+    tag {
+    key = "Name"
+    value = "terraform-asg-example"
+    propagate_at_launch = true
+    }
 }
 
-tags            =  {
-  Name          = "Failover WebServer"
- }
+resource "aws_launch_configuration" "example" {
+    image_id = "ami-0c55b159cbfafe1f0"
+    instance_type = "t2.micro"
+
+    security_groups = [aws_security_group.instance.id]
+                user_data = <<-EOF
+                #!/bin/bash
+                echo "Hello, World" > index.html
+                nohup busybox httpd -f -p ${var.server_port} &
+                EOF
+
+    # Требуется при использовании launch configuration совместно с auto scaling group.
+    # https://www.terraform.io/docs/providers/aws/r/launch_configuration.html
+    lifecycle {
+        create_before_destroy = true
+    }
 }
 
-# Веб-сервер на Ubuntu 
-resource "aws_instance" "web-server" {
-  ami		= "ami-40d28157"
-  instance_type = "t2.micro"
-  vpc_security_group_ids = ["${aws_security_group.instance.id}"]
-
-user_data	= <<-EOF
-		  #!/bin/bash
-		  echo "Hello, World" > index.html
-		  nohup busybox httpd -f -p "${var.server_port}" &
-		  EOF
-
-tags            =  {
-  Name          = "web-server"
- }
-}
 
 #############################################################################
-# VPCs
+# VPC Security Groups
 #############################################################################
 
 resource "aws_security_group" "instance" {
-  name		= "terraform-instance"
+  name = "terraform-example-instance"
 
   ingress {
-    from_port	= var.server_port
-    to_port	= var.server_port
-    protocol	= "tcp"
-    cidr_blocks	= ["0.0.0.0/0"]
-  }
+    from_port	    = var.server_port
+    to_port	        = var.server_port
+    protocol	    = "tcp"
+    cidr_blocks	    = ["0.0.0.0/0"]
+    }
+}
+
+data "aws_vpc" "default" {
+default = true
+}
+
+data "aws_subnet_ids" "default" {
+    vpc_id = data.aws_vpc.default.id
 }
