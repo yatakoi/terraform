@@ -31,13 +31,24 @@ provider "aws" {
 # ИНСТАНСЫ
 #############################################################################
 
-# Тестовый инстанс на Ubuntu
-resource "aws_instance" "first-server" {
+# Отказоустойчивый кластер веб-сервера
+resource "aws_launch_configuration" "first-server" {
   ami           = "ami-40d28157"
   instance_type = "t2.micro"
+  security_groups = ["${aws_security_group.instance.id}"]
+
+user_data = <<-EOF
+            #!/bin/bash
+            echo "Hello, World" > index.html
+            nohup busybox httpd -f -p "${var.server_port}" &
+            EOF
+            
+lifecycle {
+  create_before_destroy = true
+}
 
 tags            =  {
-  Name          = "terraform"
+  Name          = "Failover WebServer"
  }
 }
 
