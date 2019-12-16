@@ -1,41 +1,4 @@
 #############################################################################
-# ВХОДНЫЕ ПЕРЕМЕННЫЕ
-#############################################################################
-
-variable "server_port" {
-  description = "Этот порт используется для HTTP запросов"
-  default     = "8080"
-}
-
-#############################################################################
-# VPC Security Groups
-#############################################################################
-
-resource "aws_security_group" "instance" {
-  name = "terraform-example-instance"
-
-  ingress {
-    from_port	    = var.server_port
-    to_port	        = var.server_port
-    protocol	    = "tcp"
-    cidr_blocks	    = ["0.0.0.0/0"]
-    }
-}
-
-# Получить ID VPC из aws_vpc
-data "aws_subnet_ids" "default" {
-    vpc_id = data.aws_vpc.default.id
-}
-
-# Поиск данных в Default VPC
-data "aws_vpc" "default" {
-default = true
-}
-
-
-
-
-#############################################################################
 # КАКОЙ ИСПОЛЬЗУЕТСЯ ПРОВАЙДЕР И РЕГИОН
 #############################################################################
 
@@ -43,109 +6,124 @@ provider "aws" {
   region = "us-east-2"
 }
 
-#############################################################################
-# ИНСТАНСЫ
-#############################################################################
 
-# FILEOVER ВЕБ-СЕРВЕР НА UBUNTU 
-resource "aws_autoscaling_group" "example" {
-    launch_configuration = aws_launch_configuration.example.name
-    vpc_zone_identifier = data.aws_subnet_ids.default.ids
-    
-    # Включаем интеграцию между ASG и ALB, указыв аргумент target_group_arns 
-    # на целевую группу aws_lb_target_group.asg.arn,
-    # чтобы целевая группа знала, в какие инстансы EC2 отправлять запросы    
-    target_group_arns = [aws_lb_target_group.asg.arn]
-    health_check_type = "ELB"
-        
-    min_size = 2
-    max_size = 10
-    
-    tag {
-    key = "Name"
-    value = "terraform-asg-example"
-    propagate_at_launch = true
-    }
+#############################################################################
+# ПАРАМЕТРЫ БЕЗОПАСНОСТИ
+############################################################################
+
+# Чтобы ресурс ASG работал, к нему надо приаттачить VPC-подсеть.
+# subnet_ids указывает, в какие VPC-подсети должны быть развернуты иснтансы EC2. 
+# Синтаксис data.<PROVIDER>_<TYPE>.<NAME>.<ATTRIBUTE>
+
+# Получить ID VPC-подсетей из источника данных aws_vpc.
+data "aws_subnet_ids" "default" {
+    vpc_id = data.aws_vpc.default.id
 }
 
-resource "aws_launch_configuration" "example" {
-    image_id = "ami-0c55b159cbfafe1f0"
-    instance_type = "t2.micro"
-
-    security_groups = [aws_security_group.instance.id]
-                user_data = <<-EOF
-                #!/bin/bash
-                echo "Hello, World" > index.html
-                nohup busybox httpd -f -p ${var.server_port} &
-                EOF
-
-    # Требуется при использовании launch configuration совместно с auto scaling group.
-    # https://www.terraform.io/docs/providers/aws/r/launch_configuration.html
-    lifecycle {
-        create_before_destroy = true
-    }
+# Найти в VPC-подсетях Default VPC.
+data "aws_vpc" "default" {
+default = true
 }
 
 
+# По умолчанию все AWS-ресурсы, включая ALB, запрещают любой входящий/исходящий трафик. 
+# Поэтому настроим группу безопасности, которая разрешит входящий трафик на 80 порт ресурса ALB и исходящий на любой порт этого же ресурса.
+
+resource "aws_security_group" "alb-security-group" {
+    name = "terraform-alb-security-group"
+
+    # Разрешить входящие HTTP
+    ingress {
+    from_port = 80
+    to_port = 80
+    protocol = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+    }
+    # Разрешить все исходящие
+    egress {
+    from_port = 0
+    to_port = 0
+    protocol = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+    }
+}
+
+# Эта группа безопасности применяется к ресурсу aws_launch_configuration
+resource "aws_security_group" "instance" {
+  name = "terraform-aws-launch-configuration"
+
+  ingress {
+    from_port	    = 8080
+    to_port	        = 8080
+    protocol	    = "tcp"
+    cidr_blocks	    = ["0.0.0.0/0"]
+    }
+}
+
+
 #############################################################################
-# ALB - Application Load Balancer
+# ALB (Application Load Balancer)
 #############################################################################
 
-# Создаем ресурс прослушиватель по HTTP
+
+# alb — имя ресурса.
+# name — имя балансировщика.
+# load_balancer_type — тип балансировщика.
+# subnets — имя VPC-подсети. В этом случае подсеть указана как default. 
+# К сведению. По умолчанию при регистрации в AWS для всех регионов автоматически 
+# создаются подсети с именем default.
+# security_groups — имя группы безопасности, которую создали выше.
+
+resource "aws_lb" "alb" {
+    name = "terraform-alb"
+    load_balancer_type = "application"
+    subnets = data.aws_subnet_ids.default.ids
+    security_groups = [aws_security_group.alb-security-group.id]
+}
+
+# Создание listener
+# http — имя ресурса прослушивателя.
+# load_balancer_arn — имя ресурса вышесозданного ALB. В нашем случае имя alb.
+
 resource "aws_lb_listener" "http" {
-    load_balancer_arn   = aws_lb.example.arn
-    port                = 80
-    protocol            = "HTTP"
+    load_balancer_arn = aws_lb.alb.arn
+    port = 80
+    protocol = "HTTP"
 
-# По умолчанию возвращаем простую 404 страницу
+# Страница 404 если будут запросы, которые не соответствуют никаким правилам прослушивателя.
     default_action {
         type = "fixed-response"
-
         fixed_response {
-            content_type    = "text/plain"
-            message_body    = "404: страница не найдена"
-            status_code     = 404
+        content_type = "text/plain"
+        message_body = "404: страница не найдена"
+        status_code = 404
         }
     }
-}    
+}
 
-# Создаем ресурс aws_security_group для ALB
-# Разрешаем ALB входящий трафик на порт 80 и исходящий на любой другой   
-resource "aws_security_group" "alb" {
-    name = "terraform-example-alb"
+# Включаем правило прослушивателя, которое отправляет запросы,
+# соответствующие любому пути, в целевую группу для ASG.
+resource "aws_lb_listener_rule" "asg-listener_rule" {
+    listener_arn    = aws_lb_listener.http.arn
+    priority        = 100
     
-    # Разрешить входящие запросы HTTP
-    ingress {
-        from_port   = 80
-        to_port     = 80
-        protocol    = "tcp"
-        cidr_blocks = ["0.0.0.0/0"]
+    condition {
+        field   = "path-pattern"
+        values  = ["*"]
     }
-
-    # Разрешить все исходящие запросы
-    egress {
-        from_port   = 0
-        to_port     = 0
-        protocol    = "-1"
-        cidr_blocks = ["0.0.0.0/0"]
+    
+    action {
+        type = "forward"
+        target_group_arn = aws_lb_target_group.asg-target-group.arn
     }
 }
 
-# Создаем ресурс aws_lb и указываем ему использовать подсеть default
-# и aws_security_group alb
-resource "aws_lb" "example" {
-    name                = "terraform-asg-example"
-    load_balancer_type  = "application"
-    subnets             = data.aws_subnet_ids.default.ids
-    security_groups     = [aws_security_group.alb.id]
-}
-
-# Создаём ресурс aws_lb_target_group для ASG
+# Создаём целевую группу aws_lb_target_group для ASG.
 # Каждые 15 сек. будут отправляться HTTP запросы и если ответ 200, то все ОК, иначе
-# произойдет переключение на доступный инстанс 
-resource "aws_lb_target_group" "asg" {
-    name = "terraform-asg-example"
-    port = var.server_port
+# произойдет переключение на доступный инстанс. 
+resource "aws_lb_target_group" "asg-target-group" {
+    name = "terraform-aws-lb-target-group"
+    port = 8080
     protocol = "HTTP"
     vpc_id = data.aws_vpc.default.id
 
@@ -161,25 +139,55 @@ resource "aws_lb_target_group" "asg" {
 }
 
 
-# Включаем правило прослушивателя, которое отправляет запросы,
-# соответствующие любому пути, в целевую группу для ASG 
-resource "aws_lb_listener_rule" "asg" {
-    listener_arn    = aws_lb_listener.http.arn
-    priority        = 100
+#############################################################################
+# ИНСТАНСЫ
+#############################################################################
+
+# FILEOVER ВЕБ-СЕРВЕР НА UBUNTU 
+resource "aws_autoscaling_group" "ubuntu-ec2" {
+    launch_configuration = aws_launch_configuration.ubuntu-ec2.name
+    vpc_zone_identifier = data.aws_subnet_ids.default.ids
     
-    condition {
-        field   = "path-pattern"
-        values  = ["*"]
-    }
+    # Включаем интеграцию между ASG и ALB, указав аргумент target_group_arns 
+    # на целевую группу aws_lb_target_group.asg-target_group.arn,
+    # чтобы целевая группа знала, в какие инстансы EC2 отправлять запросы.   
+    target_group_arns = [aws_lb_target_group.asg-target-group.arn]
+    health_check_type = "ELB"
+        
+    min_size = 2
+    max_size = 10
     
-    action {
-        type = "forward"
-        target_group_arn = aws_lb_target_group.asg.arn
+    tag {
+    key = "Name"
+    value = "terraform-asg-ubuntu-ec2"
+    propagate_at_launch = true
     }
 }
 
-# Вывод DNS ALB
+resource "aws_launch_configuration" "ubuntu-ec2" {
+    image_id = "ami-0c55b159cbfafe1f0"
+    instance_type = "t2.micro"
+
+    security_groups = [aws_security_group.instance.id]
+                user_data = <<-EOF
+                #!/bin/bash
+                echo "Hello, World" > index.html
+                nohup busybox httpd -f -p 8080 &
+                EOF
+
+    # Требуется при использовании launch configuration совместно с auto scaling group.
+    # https://www.terraform.io/docs/providers/aws/r/launch_configuration.html
+    lifecycle {
+        create_before_destroy = true
+    }
+}
+
+
+#############################################################################
+# DNS ALB
+############################################################################
+
 output "alb_dns_name" {
-    value = aws_lb.example.dns_name
+    value = aws_lb.alb.dns_name
     description = "Доменное имя ALB"
 }
