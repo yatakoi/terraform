@@ -29,7 +29,7 @@ default = true
 # По умолчанию все AWS-ресурсы, включая ALB, запрещают любой входящий/исходящий трафик. 
 # Поэтому настроим группу безопасности, которая разрешит входящий трафик на 80 порт ресурса ALB и исходящий на любой порт этого же ресурса.
 
-resource "aws_security_group" "alb-security-group" {
+resource "aws_security_group" "alb" {
     name = "terraform-alb-security-group"
 
     # Разрешить входящие HTTP
@@ -50,7 +50,7 @@ resource "aws_security_group" "alb-security-group" {
 
 # Эта группа безопасности применяется к ресурсу aws_launch_configuration
 resource "aws_security_group" "instance" {
-  name = "terraform-aws-launch-configuration"
+  name = "terraform-instance-security-group"
 
   ingress {
     from_port	    = 8080
@@ -78,7 +78,7 @@ resource "aws_lb" "alb" {
     name = "terraform-alb"
     load_balancer_type = "application"
     subnets = data.aws_subnet_ids.default.ids
-    security_groups = [aws_security_group.alb-security-group.id]
+    security_groups = [aws_security_group.alb.id]
 }
 
 # Создание listener
